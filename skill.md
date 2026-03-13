@@ -115,11 +115,13 @@ Use `mcp__plugin_playwright_playwright__browser_evaluate` to run JavaScript that
     });
   });
 
-  // Check for overflow issues
-  document.querySelectorAll('*').forEach(el => {
-    const style = getComputedStyle(el);
-    if (el.scrollWidth > el.clientWidth + 5 && style.overflow !== 'scroll' && style.overflow !== 'auto' && style.overflowX !== 'scroll' && style.overflowX !== 'auto') {
-      if (el.tagName !== 'HTML' && el.tagName !== 'BODY') {
+  // Check for overflow issues (limited to block-level elements, capped at 500)
+  const blockSelectors = 'div, section, article, main, aside, header, footer, nav, p, ul, ol, table, form, fieldset, details, figure, pre, blockquote';
+  const overflowCandidates = document.querySelectorAll(blockSelectors);
+  Array.from(overflowCandidates).slice(0, 500).forEach(el => {
+    if (el.scrollWidth > el.clientWidth + 5) {
+      const style = getComputedStyle(el);
+      if (style.overflow !== 'scroll' && style.overflow !== 'auto' && style.overflowX !== 'scroll' && style.overflowX !== 'auto') {
         results.overflowIssues.push({
           selector: el.className ? `${el.tagName.toLowerCase()}.${Array.from(el.classList).join('.')}` : el.tagName.toLowerCase(),
           scrollWidth: el.scrollWidth,

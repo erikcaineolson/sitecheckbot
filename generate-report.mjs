@@ -8,8 +8,24 @@ if (!inputPath) {
   process.exit(1);
 }
 
-const outputPath = process.argv[3] || inputPath.replace(/\.json$/, '.xlsx');
-const data = JSON.parse(readFileSync(resolve(inputPath), 'utf-8'));
+let outputPath = process.argv[3] || inputPath.replace(/\.json$/, '.xlsx');
+if (!/\.xlsx$/i.test(outputPath)) {
+  outputPath += '.xlsx';
+}
+
+let data;
+try {
+  data = JSON.parse(readFileSync(resolve(inputPath), 'utf-8'));
+} catch (err) {
+  if (err.code === 'ENOENT') {
+    console.error(`Error: File not found: ${inputPath}`);
+  } else if (err instanceof SyntaxError) {
+    console.error(`Error: Invalid JSON in ${inputPath}: ${err.message}`);
+  } else {
+    console.error(`Error reading ${inputPath}: ${err.message}`);
+  }
+  process.exit(1);
+}
 
 const workbook = new ExcelJS.Workbook();
 workbook.creator = 'SiteCheckBot';
@@ -39,6 +55,7 @@ function styleHeader(row) {
 }
 
 function styleDataRows(sheet, startRow) {
+  const sevCol = findSeverityCol(sheet);
   for (let i = startRow; i <= sheet.rowCount; i++) {
     const row = sheet.getRow(i);
     if ((i - startRow) % 2 === 1) {
@@ -54,7 +71,6 @@ function styleDataRows(sheet, startRow) {
     });
 
     // Color-code severity column
-    const sevCol = findSeverityCol(sheet);
     if (sevCol > 0) {
       const severityCell = row.getCell(sevCol);
       if (severityCell.value) {
@@ -64,6 +80,17 @@ function styleDataRows(sheet, startRow) {
         else if (sev === 'info') severityCell.font = { color: { argb: colors.info } };
       }
     }
+  }
+}
+
+function styleBeforeAfterCells(row) {
+  const beforeCell = row.getCell('cssBefore');
+  const afterCell = row.getCell('cssAfter');
+  if (beforeCell.value && beforeCell.value !== '(not set)') {
+    beforeCell.font = { color: { argb: 'FFDC3545' } };
+  }
+  if (afterCell.value) {
+    afterCell.font = { color: { argb: 'FF28A745' } };
   }
 }
 
@@ -160,15 +187,7 @@ styleHeader(wcagSheet.getRow(1));
     refCell.font = { color: { argb: 'FF0563C1' }, underline: true };
   }
 
-  // Style before/after cells
-  const beforeCell = row.getCell('cssBefore');
-  const afterCell = row.getCell('cssAfter');
-  if (beforeCell.value && beforeCell.value !== '(not set)') {
-    beforeCell.font = { color: { argb: 'FFDC3545' } }; // red for "before"
-  }
-  if (afterCell.value) {
-    afterCell.font = { color: { argb: 'FF28A745' } }; // green for "after"
-  }
+  styleBeforeAfterCells(row);
 });
 styleDataRows(wcagSheet, 2);
 
@@ -205,15 +224,7 @@ styleHeader(qualitySheet.getRow(1));
     recommendation: issue.recommendation || '',
   });
 
-  // Style before/after cells
-  const beforeCell = row.getCell('cssBefore');
-  const afterCell = row.getCell('cssAfter');
-  if (beforeCell.value && beforeCell.value !== '(not set)') {
-    beforeCell.font = { color: { argb: 'FFDC3545' } };
-  }
-  if (afterCell.value) {
-    afterCell.font = { color: { argb: 'FF28A745' } };
-  }
+  styleBeforeAfterCells(row);
 });
 styleDataRows(qualitySheet, 2);
 
@@ -276,15 +287,7 @@ allFixes.forEach((fix) => {
     cssFix: fix.cssFix,
   });
 
-  // Style before/after cells
-  const beforeCell = row.getCell('cssBefore');
-  const afterCell = row.getCell('cssAfter');
-  if (beforeCell.value && beforeCell.value !== '(not set)') {
-    beforeCell.font = { color: { argb: 'FFDC3545' } };
-  }
-  if (afterCell.value) {
-    afterCell.font = { color: { argb: 'FF28A745' } };
-  }
+  styleBeforeAfterCells(row);
 });
 styleDataRows(cssSheet, 2);
 
@@ -305,5 +308,10 @@ styleDataRows(cssSheet, 2);
 
 // Write file
 const resolvedOutput = resolve(outputPath);
-await workbook.xlsx.writeFile(resolvedOutput);
-console.log(`Report saved to: ${resolvedOutput}`);
+try {
+  await workbook.xlsx.writeFile(resolvedOutput);
+  console.log(`Report saved to: ${resolvedOutput}`);
+} catch (err) {
+  console.error(`Error writing report to ${resolvedOutput}: ${err.message}`);
+  process.exit(1);
+}
