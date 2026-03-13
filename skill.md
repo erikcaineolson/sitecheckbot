@@ -130,6 +130,35 @@ Use `mcp__plugin_playwright_playwright__browser_evaluate` to run JavaScript that
     }
   });
 
+  // Extract CSS source rules — maps selectors to their origin stylesheets and rule text
+  results.cssSourceMap = {};
+  for (const sheet of document.styleSheets) {
+    let sheetHref;
+    try {
+      sheetHref = sheet.href || (sheet.ownerNode?.tagName === 'STYLE' ? 'embedded <style>' : 'inline');
+      // Extract just the filename from full URL for readability
+      const sheetName = sheetHref.startsWith('http')
+        ? new URL(sheetHref).pathname.split('/').pop() || sheetHref
+        : sheetHref;
+      for (const rule of sheet.cssRules) {
+        if (rule.selectorText) {
+          // Store each selector's source file and full rule text
+          const selectors = rule.selectorText.split(',').map(s => s.trim());
+          selectors.forEach(sel => {
+            if (!results.cssSourceMap[sel]) results.cssSourceMap[sel] = [];
+            results.cssSourceMap[sel].push({
+              source: sheetName,
+              fullSource: sheetHref,
+              ruleText: rule.cssText,
+            });
+          });
+        }
+      }
+    } catch (e) {
+      // Cross-origin stylesheets will throw SecurityError — skip them
+    }
+  }
+
   return results;
 })()
 ```
@@ -186,15 +215,26 @@ No `<meta name="viewport">` tag.
 ### Missing page title
 No `<title>` or empty title.
 
-## Step 5: Generate CSS fix recommendations
+## Step 5: Trace CSS sources and generate fix recommendations
 
-For each issue found, generate a concrete CSS fix. Examples:
+For each issue found:
 
-- **Low contrast**: Suggest new color values that meet the required ratio
-- **Text spacing**: Suggest `line-height`, `letter-spacing`, `word-spacing` values
-- **Overflow**: Suggest `overflow-x: auto` or `max-width: 100%`
-- **Missing focus styles**: Suggest `:focus` outline rules
-- **Line length**: Suggest `max-width` with `ch` units
+### 5a. Identify the source CSS rule
+Using the `cssSourceMap` from the extracted data, look up the selector that applies the problematic style. Record:
+- **sourceFile**: Which CSS file (or "embedded \<style\>" / "inline") defines the current rule
+- **existingRule**: The full CSS rule text currently applied (e.g., `.story-read-more { color: rgba(255,253,240,0.4); font-size: 13px; }`)
+
+If no matching rule exists (the issue is caused by a *missing* style), set sourceFile to "n/a — no existing rule" and existingRule to "".
+
+### 5b. Generate before/after CSS fixes
+For each issue, provide:
+- **cssBefore**: The existing CSS declaration(s) that cause the issue (just the relevant properties, not the full rule). If the issue is caused by a missing style, set to "(not set)".
+- **cssAfter**: The corrected CSS declaration(s) that fix the issue.
+
+Examples:
+- **Low contrast**: `cssBefore: "color: rgba(255,253,240,0.4);"` → `cssAfter: "color: rgba(255,253,240,0.58);"`
+- **Missing spacing**: `cssBefore: "(not set)"` → `cssAfter: "letter-spacing: 0.12em; word-spacing: 0.16em;"`
+- **Missing focus**: `cssBefore: "outline: none;"` → `cssAfter: "outline: 2px solid #FFE135; outline-offset: 2px;"`
 
 Make CSS fixes specific to the selectors found on the page.
 
@@ -224,6 +264,10 @@ Construct a JSON object with this exact structure and save it to a file in the c
       "description": "Text contrast ratio is 2.5:1, below 4.5:1 minimum",
       "currentValue": "2.5:1",
       "requiredValue": "4.5:1",
+      "sourceFile": "styles.css",
+      "existingRule": "p.intro { color: rgba(255,253,240,0.4); font-size: 14px; }",
+      "cssBefore": "color: rgba(255,253,240,0.4);",
+      "cssAfter": "color: #595959;",
       "cssFix": "p.intro { color: #595959; }",
       "reference": "https://www.w3.org/TR/WCAG21/#contrast-minimum"
     }
@@ -234,6 +278,10 @@ Construct a JSON object with this exact structure and save it to a file in the c
       "severity": "critical|warning|info",
       "element": "img.hero",
       "description": "Image fails to load",
+      "sourceFile": "styles.css",
+      "existingRule": "",
+      "cssBefore": "(not set)",
+      "cssAfter": "display: none;",
       "cssFix": ".hero { display: none; }",
       "recommendation": "Fix the image source or remove the element"
     }

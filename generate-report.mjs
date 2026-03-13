@@ -123,10 +123,14 @@ wcagSheet.columns = [
   { header: 'Level', key: 'level', width: 8 },
   { header: 'Severity', key: 'severity', width: 12 },
   { header: 'Element', key: 'element', width: 25 },
-  { header: 'Description', key: 'description', width: 45 },
+  { header: 'Description', key: 'description', width: 40 },
   { header: 'Current Value', key: 'currentValue', width: 15 },
   { header: 'Required Value', key: 'requiredValue', width: 15 },
-  { header: 'CSS Fix', key: 'cssFix', width: 50 },
+  { header: 'Source File', key: 'sourceFile', width: 22 },
+  { header: 'Existing Rule', key: 'existingRule', width: 45 },
+  { header: 'Before', key: 'cssBefore', width: 35 },
+  { header: 'After', key: 'cssAfter', width: 35 },
+  { header: 'Full CSS Fix', key: 'cssFix', width: 50 },
   { header: 'Reference', key: 'reference', width: 45 },
 ];
 styleHeader(wcagSheet.getRow(1));
@@ -141,6 +145,10 @@ styleHeader(wcagSheet.getRow(1));
     description: issue.description || '',
     currentValue: issue.currentValue || '',
     requiredValue: issue.requiredValue || '',
+    sourceFile: issue.sourceFile || '',
+    existingRule: issue.existingRule || '',
+    cssBefore: issue.cssBefore || '',
+    cssAfter: issue.cssAfter || '',
     cssFix: issue.cssFix || '',
     reference: issue.reference || '',
   });
@@ -150,6 +158,16 @@ styleHeader(wcagSheet.getRow(1));
     const refCell = row.getCell('reference');
     refCell.value = { text: issue.reference, hyperlink: issue.reference };
     refCell.font = { color: { argb: 'FF0563C1' }, underline: true };
+  }
+
+  // Style before/after cells
+  const beforeCell = row.getCell('cssBefore');
+  const afterCell = row.getCell('cssAfter');
+  if (beforeCell.value && beforeCell.value !== '(not set)') {
+    beforeCell.font = { color: { argb: 'FFDC3545' } }; // red for "before"
+  }
+  if (afterCell.value) {
+    afterCell.font = { color: { argb: 'FF28A745' } }; // green for "after"
   }
 });
 styleDataRows(wcagSheet, 2);
@@ -163,21 +181,39 @@ qualitySheet.columns = [
   { header: 'Category', key: 'category', width: 20 },
   { header: 'Severity', key: 'severity', width: 12 },
   { header: 'Element', key: 'element', width: 25 },
-  { header: 'Description', key: 'description', width: 50 },
-  { header: 'CSS Fix', key: 'cssFix', width: 50 },
+  { header: 'Description', key: 'description', width: 45 },
+  { header: 'Source File', key: 'sourceFile', width: 22 },
+  { header: 'Existing Rule', key: 'existingRule', width: 40 },
+  { header: 'Before', key: 'cssBefore', width: 35 },
+  { header: 'After', key: 'cssAfter', width: 35 },
+  { header: 'Full CSS Fix', key: 'cssFix', width: 50 },
   { header: 'Recommendation', key: 'recommendation', width: 45 },
 ];
 styleHeader(qualitySheet.getRow(1));
 
 (data.qualityIssues || []).forEach((issue) => {
-  qualitySheet.addRow({
+  const row = qualitySheet.addRow({
     category: issue.category || '',
     severity: issue.severity || 'warning',
     element: issue.element || '',
     description: issue.description || '',
+    sourceFile: issue.sourceFile || '',
+    existingRule: issue.existingRule || '',
+    cssBefore: issue.cssBefore || '',
+    cssAfter: issue.cssAfter || '',
     cssFix: issue.cssFix || '',
     recommendation: issue.recommendation || '',
   });
+
+  // Style before/after cells
+  const beforeCell = row.getCell('cssBefore');
+  const afterCell = row.getCell('cssAfter');
+  if (beforeCell.value && beforeCell.value !== '(not set)') {
+    beforeCell.font = { color: { argb: 'FFDC3545' } };
+  }
+  if (afterCell.value) {
+    afterCell.font = { color: { argb: 'FF28A745' } };
+  }
 });
 styleDataRows(qualitySheet, 2);
 
@@ -190,43 +226,65 @@ cssSheet.columns = [
   { header: 'Priority', key: 'priority', width: 10 },
   { header: 'Issue', key: 'issue', width: 35 },
   { header: 'Element', key: 'element', width: 25 },
-  { header: 'CSS Fix', key: 'cssFix', width: 65 },
+  { header: 'Source File', key: 'sourceFile', width: 22 },
+  { header: 'Before', key: 'cssBefore', width: 40 },
+  { header: 'After', key: 'cssAfter', width: 40 },
+  { header: 'Full CSS Fix', key: 'cssFix', width: 55 },
 ];
 styleHeader(cssSheet.getRow(1));
 
 // Collect all CSS fixes, sorted by severity
 const allFixes = [];
 (data.wcagIssues || []).forEach((issue) => {
-  if (issue.cssFix) {
+  if (issue.cssFix || issue.cssAfter) {
     allFixes.push({
       priority: issue.severity === 'critical' ? 1 : issue.severity === 'warning' ? 2 : 3,
       priorityLabel: (issue.severity || 'info').toUpperCase(),
       issue: `[${issue.criterion || 'WCAG'}] ${issue.name || issue.description || ''}`,
       element: issue.element || '',
-      cssFix: issue.cssFix,
+      sourceFile: issue.sourceFile || '',
+      cssBefore: issue.cssBefore || '',
+      cssAfter: issue.cssAfter || '',
+      cssFix: issue.cssFix || '',
     });
   }
 });
 (data.qualityIssues || []).forEach((issue) => {
-  if (issue.cssFix) {
+  if (issue.cssFix || issue.cssAfter) {
     allFixes.push({
       priority: issue.severity === 'critical' ? 1 : issue.severity === 'warning' ? 2 : 3,
       priorityLabel: (issue.severity || 'info').toUpperCase(),
       issue: `[${issue.category || 'Quality'}] ${issue.description || ''}`,
       element: issue.element || '',
-      cssFix: issue.cssFix,
+      sourceFile: issue.sourceFile || '',
+      cssBefore: issue.cssBefore || '',
+      cssAfter: issue.cssAfter || '',
+      cssFix: issue.cssFix || '',
     });
   }
 });
 
 allFixes.sort((a, b) => a.priority - b.priority);
 allFixes.forEach((fix) => {
-  cssSheet.addRow({
+  const row = cssSheet.addRow({
     priority: fix.priorityLabel,
     issue: fix.issue,
     element: fix.element,
+    sourceFile: fix.sourceFile,
+    cssBefore: fix.cssBefore,
+    cssAfter: fix.cssAfter,
     cssFix: fix.cssFix,
   });
+
+  // Style before/after cells
+  const beforeCell = row.getCell('cssBefore');
+  const afterCell = row.getCell('cssAfter');
+  if (beforeCell.value && beforeCell.value !== '(not set)') {
+    beforeCell.font = { color: { argb: 'FFDC3545' } };
+  }
+  if (afterCell.value) {
+    afterCell.font = { color: { argb: 'FF28A745' } };
+  }
 });
 styleDataRows(cssSheet, 2);
 
