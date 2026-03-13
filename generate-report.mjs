@@ -55,16 +55,19 @@ if (typeof data !== 'object' || data === null || Array.isArray(data)) {
 }
 if (!Array.isArray(data.wcagIssues)) data.wcagIssues = [];
 if (!Array.isArray(data.qualityIssues)) data.qualityIssues = [];
+if (!Array.isArray(data.brokenLinks)) data.brokenLinks = [];
+if (!Array.isArray(data.formIssues)) data.formIssues = [];
+if (!Array.isArray(data.adDetection)) data.adDetection = [];
+if (!Array.isArray(data.pages)) data.pages = [];
+if (typeof data.crawlInfo !== 'object' || data.crawlInfo === null) data.crawlInfo = {};
 if (typeof data.summary !== 'object' || data.summary === null) data.summary = {};
 
 // Cap array sizes to prevent memory exhaustion
-if (data.wcagIssues.length > MAX_ROWS) {
-  console.warn(`Warning: wcagIssues truncated from ${data.wcagIssues.length} to ${MAX_ROWS} rows.`);
-  data.wcagIssues = data.wcagIssues.slice(0, MAX_ROWS);
-}
-if (data.qualityIssues.length > MAX_ROWS) {
-  console.warn(`Warning: qualityIssues truncated from ${data.qualityIssues.length} to ${MAX_ROWS} rows.`);
-  data.qualityIssues = data.qualityIssues.slice(0, MAX_ROWS);
+for (const key of ['wcagIssues', 'qualityIssues', 'brokenLinks', 'formIssues', 'adDetection', 'pages']) {
+  if (data[key].length > MAX_ROWS) {
+    console.warn(`Warning: ${key} truncated from ${data[key].length} to ${MAX_ROWS} rows.`);
+    data[key] = data[key].slice(0, MAX_ROWS);
+  }
 }
 
 /**
@@ -76,7 +79,13 @@ if (data.qualityIssues.length > MAX_ROWS) {
 function sanitize(value) {
   if (value === null || value === undefined) return '';
   if (typeof value === 'object') return JSON.stringify(value);
-  return value;
+  let str = String(value);
+  // Strip Unicode invisible/control characters that could hide content in cells
+  str = str.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\u00AD\u200B-\u200F\u2028-\u202F\uFEFF]/g, '');
+  // Prevent CSV/formula injection: prefix strings that could be interpreted as
+  // formulas if the XLSX is re-exported to CSV or opened in a less strict tool.
+  if (/^[=+\-@\t\r\n]/.test(str)) return "'" + str;
+  return str;
 }
 
 /**
@@ -97,6 +106,7 @@ function isValidHttpUrl(str) {
 function collectFix(issue, issueLabel) {
   if (!issue.cssFix && !issue.cssAfter) return null;
   return {
+    page: sanitize(issue.pageUrl || data.url || ''),
     priority: issue.severity === 'critical' ? 1 : issue.severity === 'warning' ? 2 : 3,
     priorityLabel: (issue.severity || 'info').toUpperCase(),
     issue: sanitize(issueLabel),
@@ -195,21 +205,30 @@ summarySheet.columns = [
 styleHeader(summarySheet.getRow(1));
 
 const summary = data.summary;
+const crawlInfo = data.crawlInfo;
 /** Coerce to non-negative integer, defaulting to 0. */
 function toCount(val) {
   const n = Number(val);
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
 }
+const adNetworks = Array.isArray(summary.adNetworksDetected) ? summary.adNetworksDetected : [];
 const summaryRows = [
   { field: 'URL', value: sanitize(data.url || '') },
   { field: 'Date Checked', value: sanitize(data.timestamp || new Date().toISOString()) },
+  { field: 'Pages Crawled', value: toCount(crawlInfo.pagesVisited) || 1 },
   { field: 'Total Issues', value: toCount(summary.totalIssues) },
   { field: 'WCAG Issues', value: toCount(summary.wcagIssues) },
   { field: 'Quality Issues', value: toCount(summary.qualityIssues) },
+  { field: 'Broken Links', value: toCount(summary.brokenLinks) },
+  { field: 'Form Issues', value: toCount(summary.formIssues) },
+  { field: 'Ad Networks Detected', value: adNetworks.length > 0 ? sanitize(adNetworks.join(', ')) : 'None' },
   { field: 'Critical', value: toCount(summary.criticalCount) },
   { field: 'Warnings', value: toCount(summary.warningCount) },
   { field: 'Info', value: toCount(summary.infoCount) },
 ];
+if (data.pages.length > 0) {
+  summaryRows.push({ field: 'Pages Visited', value: sanitize(data.pages.map((p) => p.url || p).join('\n')) });
+}
 summaryRows.forEach((r) => summarySheet.addRow(r));
 
 // Bold field names, color critical count
@@ -230,6 +249,7 @@ const wcagSheet = workbook.addWorksheet('WCAG Accessibility', {
 });
 
 wcagSheet.columns = [
+  { header: 'Page', key: 'page', width: 35 },
   { header: 'Criterion', key: 'criterion', width: 12 },
   { header: 'Name', key: 'name', width: 25 },
   { header: 'Level', key: 'level', width: 8 },
@@ -251,6 +271,7 @@ const allFixes = [];
 
 data.wcagIssues.forEach((issue) => {
   const row = wcagSheet.addRow({
+    page: sanitize(issue.pageUrl || data.url || ''),
     criterion: sanitize(issue.criterion || ''),
     name: sanitize(issue.name || ''),
     level: sanitize(issue.level || ''),
@@ -270,7 +291,7 @@ data.wcagIssues.forEach((issue) => {
   // Make reference a hyperlink if it's a valid HTTP(S) URL
   if (issue.reference && isValidHttpUrl(issue.reference)) {
     const refCell = row.getCell('reference');
-    refCell.value = { text: issue.reference, hyperlink: issue.reference };
+    refCell.value = { text: sanitize(issue.reference), hyperlink: issue.reference };
     refCell.font = { color: { argb: 'FF0563C1' }, underline: true };
   }
 
@@ -288,6 +309,7 @@ const qualitySheet = workbook.addWorksheet('Page Quality', {
 });
 
 qualitySheet.columns = [
+  { header: 'Page', key: 'page', width: 35 },
   { header: 'Category', key: 'category', width: 20 },
   { header: 'Severity', key: 'severity', width: 12 },
   { header: 'Element', key: 'element', width: 25 },
@@ -303,6 +325,7 @@ styleHeader(qualitySheet.getRow(1));
 
 data.qualityIssues.forEach((issue) => {
   const row = qualitySheet.addRow({
+    page: sanitize(issue.pageUrl || data.url || ''),
     category: sanitize(issue.category || ''),
     severity: sanitize(issue.severity || 'warning'),
     element: sanitize(issue.element || ''),
@@ -329,6 +352,7 @@ const cssSheet = workbook.addWorksheet('CSS Fixes', {
 });
 
 cssSheet.columns = [
+  { header: 'Page', key: 'page', width: 35 },
   { header: 'Priority', key: 'priority', width: 10 },
   { header: 'Issue', key: 'issue', width: 35 },
   { header: 'Element', key: 'element', width: 25 },
@@ -342,6 +366,7 @@ styleHeader(cssSheet.getRow(1));
 allFixes.sort((a, b) => a.priority - b.priority);
 allFixes.forEach((fix) => {
   const row = cssSheet.addRow({
+    page: fix.page,
     priority: fix.priorityLabel,
     issue: fix.issue,
     element: fix.element,
@@ -355,8 +380,83 @@ allFixes.forEach((fix) => {
 });
 styleDataRows(cssSheet, 2, findSeverityCol(cssSheet));
 
+// ─── Sheet 5: Broken Links ───
+const brokenLinksSheet = workbook.addWorksheet('Broken Links', {
+  properties: { tabColor: { argb: colors.critical } },
+});
+
+brokenLinksSheet.columns = [
+  { header: 'Broken URL', key: 'url', width: 50 },
+  { header: 'Status', key: 'status', width: 12 },
+  { header: 'Error', key: 'error', width: 30 },
+  { header: 'Link Text', key: 'linkText', width: 25 },
+  { header: 'Internal', key: 'internal', width: 10 },
+  { header: 'Found On Pages', key: 'foundOnPages', width: 50 },
+];
+styleHeader(brokenLinksSheet.getRow(1));
+
+data.brokenLinks.forEach((link) => {
+  brokenLinksSheet.addRow({
+    url: sanitize(link.url || ''),
+    status: sanitize(link.status || ''),
+    error: sanitize(link.error || ''),
+    linkText: sanitize(link.linkText || ''),
+    internal: link.internal ? 'Yes' : 'No',
+    foundOnPages: sanitize(Array.isArray(link.foundOnPages) ? link.foundOnPages.join('\n') : ''),
+  });
+});
+styleDataRows(brokenLinksSheet, 2, 0);
+
+// ─── Sheet 6: Form Issues ───
+const formIssuesSheet = workbook.addWorksheet('Form Issues', {
+  properties: { tabColor: { argb: colors.warning } },
+});
+
+formIssuesSheet.columns = [
+  { header: 'Page', key: 'page', width: 35 },
+  { header: 'Form', key: 'form', width: 30 },
+  { header: 'Issue Type', key: 'issueType', width: 20 },
+  { header: 'Severity', key: 'severity', width: 12 },
+  { header: 'Description', key: 'description', width: 45 },
+  { header: 'Details', key: 'details', width: 40 },
+];
+styleHeader(formIssuesSheet.getRow(1));
+
+data.formIssues.forEach((issue) => {
+  formIssuesSheet.addRow({
+    page: sanitize(issue.pageUrl || data.url || ''),
+    form: sanitize(issue.form || ''),
+    issueType: sanitize(issue.issueType || ''),
+    severity: sanitize(issue.severity || 'warning'),
+    description: sanitize(issue.description || ''),
+    details: sanitize(issue.details || ''),
+  });
+});
+styleDataRows(formIssuesSheet, 2, findSeverityCol(formIssuesSheet));
+
+// ─── Sheet 7: Ad Detection ───
+const adDetectionSheet = workbook.addWorksheet('Ad Detection', {
+  properties: { tabColor: { argb: colors.info } },
+});
+
+adDetectionSheet.columns = [
+  { header: 'Ad Network', key: 'network', width: 25 },
+  { header: 'Detected', key: 'detected', width: 12 },
+  { header: 'Found On Pages', key: 'foundOnPages', width: 60 },
+];
+styleHeader(adDetectionSheet.getRow(1));
+
+data.adDetection.forEach((ad) => {
+  adDetectionSheet.addRow({
+    network: sanitize(ad.network || ''),
+    detected: ad.detected ? 'Yes' : 'No',
+    foundOnPages: sanitize(Array.isArray(ad.foundOnPages) ? ad.foundOnPages.join('\n') : ''),
+  });
+});
+styleDataRows(adDetectionSheet, 2, 0);
+
 // ─── Auto-filter on all sheets ───
-[wcagSheet, qualitySheet, cssSheet].forEach((sheet) => {
+[wcagSheet, qualitySheet, cssSheet, brokenLinksSheet, formIssuesSheet, adDetectionSheet].forEach((sheet) => {
   if (sheet.rowCount > 1) {
     sheet.autoFilter = {
       from: { row: 1, column: 1 },
@@ -366,7 +466,7 @@ styleDataRows(cssSheet, 2, findSeverityCol(cssSheet));
 });
 
 // ─── Freeze header rows ───
-[summarySheet, wcagSheet, qualitySheet, cssSheet].forEach((sheet) => {
+[summarySheet, wcagSheet, qualitySheet, cssSheet, brokenLinksSheet, formIssuesSheet, adDetectionSheet].forEach((sheet) => {
   sheet.views = [{ state: 'frozen', ySplit: 1 }];
 });
 
