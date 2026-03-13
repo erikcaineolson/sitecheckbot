@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Site accessibility and quality checker with Excel reporting",
   "main": "generate-report.mjs",
+  "bin": {
+    "sitecheckbot-report": "./generate-report.mjs"
+  },
   "scripts": {
     "report": "node generate-report.mjs"
   },

@@ -1,6 +1,10 @@
+#!/usr/bin/env node
 import ExcelJS from 'exceljs';
-import { readFileSync } from 'fs';
+import { readFile, stat } from 'fs/promises';
 import { resolve } from 'path';
+
+const MAX_ROWS = 10_000;
+const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50 MB
 
 const inputPath = process.argv[2];
 if (!inputPath) {
@@ -13,9 +17,26 @@ if (!/\.xlsx$/i.test(outputPath)) {
   outputPath += '.xlsx';
 }
 
+const resolvedInput = resolve(inputPath);
+
+// Reject excessively large files before reading into memory
+try {
+  const fileStat = await stat(resolvedInput);
+  if (fileStat.size > MAX_FILE_BYTES) {
+    console.error(`Error: File is ${(fileStat.size / 1024 / 1024).toFixed(1)} MB, exceeds ${MAX_FILE_BYTES / 1024 / 1024} MB limit.`);
+    process.exit(1);
+  }
+} catch (err) {
+  if (err.code === 'ENOENT') {
+    console.error(`Error: File not found: ${inputPath}`);
+    process.exit(1);
+  }
+  // Other stat errors — fall through to readFile which will give a better message
+}
+
 let data;
 try {
-  data = JSON.parse(readFileSync(resolve(inputPath), 'utf-8'));
+  data = JSON.parse(await readFile(resolvedInput, 'utf-8'));
 } catch (err) {
   if (err.code === 'ENOENT') {
     console.error(`Error: File not found: ${inputPath}`);
@@ -25,6 +46,66 @@ try {
     console.error(`Error reading ${inputPath}: ${err.message}`);
   }
   process.exit(1);
+}
+
+// Validate JSON structure
+if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+  console.error('Error: JSON root must be an object with url, summary, wcagIssues, and qualityIssues keys.');
+  process.exit(1);
+}
+if (!Array.isArray(data.wcagIssues)) data.wcagIssues = [];
+if (!Array.isArray(data.qualityIssues)) data.qualityIssues = [];
+if (typeof data.summary !== 'object' || data.summary === null) data.summary = {};
+
+// Cap array sizes to prevent memory exhaustion
+if (data.wcagIssues.length > MAX_ROWS) {
+  console.warn(`Warning: wcagIssues truncated from ${data.wcagIssues.length} to ${MAX_ROWS} rows.`);
+  data.wcagIssues = data.wcagIssues.slice(0, MAX_ROWS);
+}
+if (data.qualityIssues.length > MAX_ROWS) {
+  console.warn(`Warning: qualityIssues truncated from ${data.qualityIssues.length} to ${MAX_ROWS} rows.`);
+  data.qualityIssues = data.qualityIssues.slice(0, MAX_ROWS);
+}
+
+/**
+ * Ensure cell values are safe primitives for ExcelJS.
+ * Prevents object values (e.g., { formula: '...' }) from being interpreted as
+ * formulas, hyperlinks, or rich text by ExcelJS. String values are safe in XLSX
+ * format since ExcelJS stores them with explicit type="s" in the XML.
+ */
+function sanitize(value) {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return value;
+}
+
+/**
+ * Validate that a string is a safe HTTP(S) URL.
+ */
+function isValidHttpUrl(str) {
+  try {
+    const url = new URL(str);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Build a CSS fix entry from an issue, or return null if no fix exists.
+ */
+function collectFix(issue, issueLabel) {
+  if (!issue.cssFix && !issue.cssAfter) return null;
+  return {
+    priority: issue.severity === 'critical' ? 1 : issue.severity === 'warning' ? 2 : 3,
+    priorityLabel: (issue.severity || 'info').toUpperCase(),
+    issue: sanitize(issueLabel),
+    element: sanitize(issue.element || ''),
+    sourceFile: sanitize(issue.sourceFile || ''),
+    cssBefore: sanitize(issue.cssBefore || ''),
+    cssAfter: sanitize(issue.cssAfter || ''),
+    cssFix: sanitize(issue.cssFix || ''),
+  };
 }
 
 const workbook = new ExcelJS.Workbook();
@@ -54,8 +135,16 @@ function styleHeader(row) {
   });
 }
 
-function styleDataRows(sheet, startRow) {
-  const sevCol = findSeverityCol(sheet);
+function findSeverityCol(sheet) {
+  const headerRow = sheet.getRow(1);
+  for (let i = 1; i <= headerRow.cellCount; i++) {
+    const val = String(headerRow.getCell(i).value).toLowerCase();
+    if (val === 'severity' || val === 'priority') return i;
+  }
+  return 0;
+}
+
+function styleDataRows(sheet, startRow, sevCol) {
   for (let i = startRow; i <= sheet.rowCount; i++) {
     const row = sheet.getRow(i);
     if ((i - startRow) % 2 === 1) {
@@ -94,15 +183,6 @@ function styleBeforeAfterCells(row) {
   }
 }
 
-function findSeverityCol(sheet) {
-  const headerRow = sheet.getRow(1);
-  for (let i = 1; i <= headerRow.cellCount; i++) {
-    const val = String(headerRow.getCell(i).value).toLowerCase();
-    if (val === 'severity' || val === 'priority') return i;
-  }
-  return 0;
-}
-
 // ─── Sheet 1: Summary ───
 const summarySheet = workbook.addWorksheet('Summary', {
   properties: { tabColor: { argb: colors.headerBg } },
@@ -114,16 +194,21 @@ summarySheet.columns = [
 ];
 styleHeader(summarySheet.getRow(1));
 
-const summary = data.summary || {};
+const summary = data.summary;
+/** Coerce to non-negative integer, defaulting to 0. */
+function toCount(val) {
+  const n = Number(val);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+}
 const summaryRows = [
-  { field: 'URL', value: data.url || '' },
-  { field: 'Date Checked', value: data.timestamp || new Date().toISOString() },
-  { field: 'Total Issues', value: summary.totalIssues || 0 },
-  { field: 'WCAG Issues', value: summary.wcagIssues || 0 },
-  { field: 'Quality Issues', value: summary.qualityIssues || 0 },
-  { field: 'Critical', value: summary.criticalCount || 0 },
-  { field: 'Warnings', value: summary.warningCount || 0 },
-  { field: 'Info', value: summary.infoCount || 0 },
+  { field: 'URL', value: sanitize(data.url || '') },
+  { field: 'Date Checked', value: sanitize(data.timestamp || new Date().toISOString()) },
+  { field: 'Total Issues', value: toCount(summary.totalIssues) },
+  { field: 'WCAG Issues', value: toCount(summary.wcagIssues) },
+  { field: 'Quality Issues', value: toCount(summary.qualityIssues) },
+  { field: 'Critical', value: toCount(summary.criticalCount) },
+  { field: 'Warnings', value: toCount(summary.warningCount) },
+  { field: 'Info', value: toCount(summary.infoCount) },
 ];
 summaryRows.forEach((r) => summarySheet.addRow(r));
 
@@ -162,34 +247,40 @@ wcagSheet.columns = [
 ];
 styleHeader(wcagSheet.getRow(1));
 
-(data.wcagIssues || []).forEach((issue) => {
+const allFixes = [];
+
+data.wcagIssues.forEach((issue) => {
   const row = wcagSheet.addRow({
-    criterion: issue.criterion || '',
-    name: issue.name || '',
-    level: issue.level || '',
-    severity: issue.severity || 'warning',
-    element: issue.element || '',
-    description: issue.description || '',
-    currentValue: issue.currentValue || '',
-    requiredValue: issue.requiredValue || '',
-    sourceFile: issue.sourceFile || '',
-    existingRule: issue.existingRule || '',
-    cssBefore: issue.cssBefore || '',
-    cssAfter: issue.cssAfter || '',
-    cssFix: issue.cssFix || '',
-    reference: issue.reference || '',
+    criterion: sanitize(issue.criterion || ''),
+    name: sanitize(issue.name || ''),
+    level: sanitize(issue.level || ''),
+    severity: sanitize(issue.severity || 'warning'),
+    element: sanitize(issue.element || ''),
+    description: sanitize(issue.description || ''),
+    currentValue: sanitize(issue.currentValue || ''),
+    requiredValue: sanitize(issue.requiredValue || ''),
+    sourceFile: sanitize(issue.sourceFile || ''),
+    existingRule: sanitize(issue.existingRule || ''),
+    cssBefore: sanitize(issue.cssBefore || ''),
+    cssAfter: sanitize(issue.cssAfter || ''),
+    cssFix: sanitize(issue.cssFix || ''),
+    reference: sanitize(issue.reference || ''),
   });
 
-  // Make reference a hyperlink if it's a URL
-  if (issue.reference && issue.reference.startsWith('http')) {
+  // Make reference a hyperlink if it's a valid HTTP(S) URL
+  if (issue.reference && isValidHttpUrl(issue.reference)) {
     const refCell = row.getCell('reference');
     refCell.value = { text: issue.reference, hyperlink: issue.reference };
     refCell.font = { color: { argb: 'FF0563C1' }, underline: true };
   }
 
   styleBeforeAfterCells(row);
+
+  // Collect CSS fix in same pass
+  const fix = collectFix(issue, `[${issue.criterion || 'WCAG'}] ${issue.name || issue.description || ''}`);
+  if (fix) allFixes.push(fix);
 });
-styleDataRows(wcagSheet, 2);
+styleDataRows(wcagSheet, 2, findSeverityCol(wcagSheet));
 
 // ─── Sheet 3: Page Quality ───
 const qualitySheet = workbook.addWorksheet('Page Quality', {
@@ -210,23 +301,27 @@ qualitySheet.columns = [
 ];
 styleHeader(qualitySheet.getRow(1));
 
-(data.qualityIssues || []).forEach((issue) => {
+data.qualityIssues.forEach((issue) => {
   const row = qualitySheet.addRow({
-    category: issue.category || '',
-    severity: issue.severity || 'warning',
-    element: issue.element || '',
-    description: issue.description || '',
-    sourceFile: issue.sourceFile || '',
-    existingRule: issue.existingRule || '',
-    cssBefore: issue.cssBefore || '',
-    cssAfter: issue.cssAfter || '',
-    cssFix: issue.cssFix || '',
-    recommendation: issue.recommendation || '',
+    category: sanitize(issue.category || ''),
+    severity: sanitize(issue.severity || 'warning'),
+    element: sanitize(issue.element || ''),
+    description: sanitize(issue.description || ''),
+    sourceFile: sanitize(issue.sourceFile || ''),
+    existingRule: sanitize(issue.existingRule || ''),
+    cssBefore: sanitize(issue.cssBefore || ''),
+    cssAfter: sanitize(issue.cssAfter || ''),
+    cssFix: sanitize(issue.cssFix || ''),
+    recommendation: sanitize(issue.recommendation || ''),
   });
 
   styleBeforeAfterCells(row);
+
+  // Collect CSS fix in same pass
+  const fix = collectFix(issue, `[${issue.category || 'Quality'}] ${issue.description || ''}`);
+  if (fix) allFixes.push(fix);
 });
-styleDataRows(qualitySheet, 2);
+styleDataRows(qualitySheet, 2, findSeverityCol(qualitySheet));
 
 // ─── Sheet 4: CSS Fixes ───
 const cssSheet = workbook.addWorksheet('CSS Fixes', {
@@ -244,37 +339,6 @@ cssSheet.columns = [
 ];
 styleHeader(cssSheet.getRow(1));
 
-// Collect all CSS fixes, sorted by severity
-const allFixes = [];
-(data.wcagIssues || []).forEach((issue) => {
-  if (issue.cssFix || issue.cssAfter) {
-    allFixes.push({
-      priority: issue.severity === 'critical' ? 1 : issue.severity === 'warning' ? 2 : 3,
-      priorityLabel: (issue.severity || 'info').toUpperCase(),
-      issue: `[${issue.criterion || 'WCAG'}] ${issue.name || issue.description || ''}`,
-      element: issue.element || '',
-      sourceFile: issue.sourceFile || '',
-      cssBefore: issue.cssBefore || '',
-      cssAfter: issue.cssAfter || '',
-      cssFix: issue.cssFix || '',
-    });
-  }
-});
-(data.qualityIssues || []).forEach((issue) => {
-  if (issue.cssFix || issue.cssAfter) {
-    allFixes.push({
-      priority: issue.severity === 'critical' ? 1 : issue.severity === 'warning' ? 2 : 3,
-      priorityLabel: (issue.severity || 'info').toUpperCase(),
-      issue: `[${issue.category || 'Quality'}] ${issue.description || ''}`,
-      element: issue.element || '',
-      sourceFile: issue.sourceFile || '',
-      cssBefore: issue.cssBefore || '',
-      cssAfter: issue.cssAfter || '',
-      cssFix: issue.cssFix || '',
-    });
-  }
-});
-
 allFixes.sort((a, b) => a.priority - b.priority);
 allFixes.forEach((fix) => {
   const row = cssSheet.addRow({
@@ -289,7 +353,7 @@ allFixes.forEach((fix) => {
 
   styleBeforeAfterCells(row);
 });
-styleDataRows(cssSheet, 2);
+styleDataRows(cssSheet, 2, findSeverityCol(cssSheet));
 
 // ─── Auto-filter on all sheets ───
 [wcagSheet, qualitySheet, cssSheet].forEach((sheet) => {
