@@ -7,7 +7,8 @@
     "sitecheckbot-report": "./generate-report.mjs"
   },
   "scripts": {
-    "report": "node generate-report.mjs"
+    "report": "node generate-report.mjs",
+    "bulk-summary": "node generate-bulk-summary.mjs"
   },
   "keywords": ["wcag", "accessibility", "site-check"],
   "author": "",
