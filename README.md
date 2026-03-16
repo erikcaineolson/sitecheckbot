@@ -92,6 +92,8 @@ This audits each domain independently (up to 20 domains), producing:
 - Individual results: `sitecheck-{domain}-results.json`
 - Cross-domain summary: `sitecheck-bulk-summary.xlsx`
 
+A word of caution when using the bulk check: it is _very_ easy to run out of tokens. Oftentimes the single check is generally the better option, especially if you have large websites.
+
 ### Report Generator (Standalone)
 
 If you already have findings in JSON format:
