@@ -54,8 +54,10 @@ cd sitecheckbot
 npm install
 
 # Copy the skill files into your Claude Code skills directory
-cp skill.md ~/.claude/skills/sitecheck.md
-cp skill-bulk.md ~/.claude/skills/sitecheckbulk.md
+mkdir -p ~/.claulde/skills/sitecheck
+mkdir -p ~/.claulde/skills/sitecheckbulk
+cp skill.md ~/.claude/skills/sitecheck/SKILL.md
+cp skill-bulk.md ~/.claude/skills/sitecheckbulk/SKILL.md
 ```
 
 ## Usage
