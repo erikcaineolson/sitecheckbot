@@ -2,6 +2,8 @@
 
 A Claude Code skill that crawls websites (up to 25 pages), audits them for WCAG accessibility violations, page quality issues, broken links, form problems, and ad network presence, then generates Excel reports with CSS source tracing and fix recommendations.
 
+The skill may ask for permission throughout its run. This is an expected security function of Claude. As with all skills, please take the time to understand the README before running it blindly.
+
 ## What It Does
 
 Give it a URL and it will:
