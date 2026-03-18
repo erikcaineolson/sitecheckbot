@@ -1,49 +1,44 @@
 # SiteCheckBot
 
-A Claude Code skill that crawls websites (up to 25 pages), audits them for WCAG accessibility violations, page quality issues, broken links, form problems, and ad network presence, then generates Excel reports with CSS source tracing and fix recommendations.
+A website auditing toolkit that crawls sites (up to 25 pages each), checks for WCAG accessibility violations, page quality issues, broken links, form problems, and ad network presence, then generates Excel reports with CSS source tracing and fix recommendations.
 
-The skill may ask for permission throughout its run. This is an expected security function of Claude. As with all skills, please take the time to understand the README before running it blindly.
+Available as both a **standalone Node.js CLI tool** and a **Claude Code skill** (via MCP).
 
 ## What It Does
 
-Give it a URL and it will:
+Give it a URL (or a list of up to 20) and it will:
 
 1. **Crawl the site** — starting from the seed URL, discover and visit up to 25 internal pages
-2. **Extract page data** using Playwright — computed styles, DOM structure, element data, CSS source maps, forms, and ad scripts
-3. **Run WCAG accessibility checks** using WCAG MCP tools:
-   - Color contrast (1.4.3 AA, 1.4.6 AAA)
+2. **Extract page data** using Playwright — computed styles, DOM structure, images, headings, links, forms, and ad scripts
+3. **Run WCAG accessibility checks**:
+   - Color contrast ratio calculation (1.4.3 AA, 1.4.6 AAA)
    - Text spacing — line-height, letter-spacing, word-spacing (1.4.12)
-   - Line length (1.4.8)
    - Language attribute (3.1.1)
 4. **Analyze page quality**:
    - Broken images (naturalWidth === 0)
    - Missing alt text
-   - Heading hierarchy (skipped levels)
+   - Heading hierarchy (skipped levels, multiple H1s)
    - Empty links (missing text or aria-label)
    - Missing form labels
    - Overflow/clipping issues
    - Missing viewport meta
    - Missing page title
+   - Missing meta description
 5. **Check for broken links** — HEAD/GET requests against all unique link URLs (up to 500), with CORS-aware classification
-6. **Validate forms** — missing actions, unreachable action URLs, missing methods, unlabeled fields
+6. **Validate forms** — missing actions, unreachable action URLs, unlabeled fields
 7. **Detect ad networks** — Google AdSense, Google Ad Manager, Amazon Ads, Media.net, Taboola, Outbrain, Ezoic, Mediavine, AdThrive, Sovrn, PropellerAds, and Revive Ad Server
-8. **Trace CSS sources** — identify which stylesheet or `<style>` block defines the problematic rule, with before/after diffs
-9. **Generate CSS fixes** — copy-paste ready, specific to the selectors found on the page
-10. **Produce an Excel report** with 7 sheets:
-    - **Summary** — URL, date, crawl stats, issue counts, ad networks detected
-    - **WCAG Accessibility** — all WCAG issues with severity, CSS source tracing, before/after diffs, full fixes, and spec references
-    - **Page Quality** — broken images, heading order, form labels, overflow, etc. with CSS source tracing
-    - **CSS Fixes** — all fixes sorted by priority for easy copy-paste
-    - **Broken Links** — broken URLs with status codes, link text, and which pages link to them
-    - **Form Issues** — missing actions, unreachable endpoints, unlabeled fields
-    - **Ad Detection** — which ad networks are present and on which pages
+8. **Generate CSS fix recommendations** — specific to the selectors found on the page
+9. **Produce Excel reports** with formatted sheets, color-coded severity, and auto-filters
 
 ## Requirements
 
-- [Claude Code](https://claude.ai/code) with MCP servers enabled
-- [Playwright MCP server](https://github.com/anthropics/claude-code/tree/main/packages/playwright-mcp) — for loading and inspecting pages
-- WCAG MCP servers — for accessibility checks (wcag-text, wcag-structure, wcag-forms, wcag-keyboard, wcag-media, wcag-aria)
 - Node.js 18+
+- Playwright (`npm install` handles this)
+
+For the Claude Code skill mode, you also need:
+- [Claude Code](https://claude.ai/code) with MCP servers enabled
+- [Playwright MCP server](https://github.com/anthropics/claude-code/tree/main/packages/playwright-mcp)
+- WCAG MCP servers (wcag-text, wcag-structure, wcag-forms, wcag-keyboard, wcag-media, wcag-aria)
 
 ## Installation
 
@@ -54,47 +49,67 @@ cd sitecheckbot
 
 # Install dependencies
 npm install
+```
 
-# Copy the skill files into your Claude Code skills directory
-mkdir -p ~/.claulde/skills/sitecheck
-mkdir -p ~/.claulde/skills/sitecheckbulk
+### Optional: Install as Claude Code skill
+
+```bash
+mkdir -p ~/.claude/skills/sitecheck
+mkdir -p ~/.claude/skills/site-check-bulk
 cp skill.md ~/.claude/skills/sitecheck/SKILL.md
-cp skill-bulk.md ~/.claude/skills/sitecheckbulk/SKILL.md
+cp skill-bulk.md ~/.claude/skills/site-check-bulk/SKILL.md
 ```
 
 ## Usage
 
-### Single-Site Audit
+### Batch Audit (CLI — Recommended)
+
+Create a text file with one domain per line:
 
 ```
-/sitecheck https://example.com
-```
-
-Claude will crawl the site (up to 25 pages), run all checks, and generate `sitecheck-report.xlsx` in your current directory.
-
-### Bulk Domain Audit
-
-Create a text file with one URL per line:
-
-```
-https://example.com
-https://another-site.org
+example.com
+another-site.org
 # comments are ignored
-https://third-domain.net
+third-domain.net
 ```
 
 Then run:
 
-```
-/sitecheckbulk domains.txt
+```bash
+node batch-audit.mjs domains.txt
 ```
 
-This audits each domain independently (up to 20 domains), producing:
-- Individual reports: `sitecheck-{domain}-report.xlsx`
-- Individual results: `sitecheck-{domain}-results.json`
-- Cross-domain summary: `sitecheck-bulk-summary.xlsx`
+This crawls and audits each domain (up to 20), producing:
+- Individual JSON results: `sitecheck-{domain}-results.json`
+- Progress output to the console
 
-A word of caution when using the bulk check: it is _very_ easy to run out of tokens. Oftentimes the single check is generally the better option, especially if you have large websites.
+Then generate reports:
+
+```bash
+# Individual Excel reports
+for f in sitecheck-*-results.json; do
+  node generate-report.mjs "$f" "${f%-results.json}-report.xlsx"
+done
+
+# Cross-domain summary
+node generate-bulk-summary.mjs sitecheck-*-results.json
+```
+
+### Single-Site Audit (Claude Code Skill)
+
+```
+/site-check https://example.com
+```
+
+Claude will crawl the site (up to 25 pages), run all checks, and generate `sitecheck-report.xlsx` in your current directory.
+
+### Bulk Audit (Claude Code Skill)
+
+```
+/site-check-bulk domains.txt
+```
+
+This uses the MCP-based workflow for each domain. Note: for large batches, the CLI approach (`batch-audit.mjs`) is significantly faster and avoids MCP tool output size limits.
 
 ### Report Generator (Standalone)
 
@@ -112,9 +127,34 @@ If you already have multiple result JSON files:
 node generate-bulk-summary.mjs sitecheck-*-results.json
 ```
 
-## JSON Input Format
+## Architecture
 
-The report generator expects a JSON file with this structure:
+### CLI Pipeline
+
+```
+batch-audit.mjs          → Playwright crawl + extraction + analysis → JSON per domain
+generate-report.mjs      → JSON → individual Excel report
+generate-bulk-summary.mjs → multiple JSONs → cross-domain summary Excel
+```
+
+The `batch-audit.mjs` script uses Playwright programmatically (not via MCP), which means:
+- No output size limits on page extraction
+- Much faster batch processing (minutes vs. hours for 20 domains)
+- Can be integrated into web services, CI pipelines, or scheduled tasks
+- Self-contained — no MCP server dependencies
+
+### Claude Code Skill Pipeline
+
+```
+skill.md     → MCP Playwright + WCAG MCP tools → JSON → generate-report.mjs → Excel
+skill-bulk.md → runs skill.md per domain → generate-bulk-summary.mjs → summary Excel
+```
+
+The skill mode provides a conversational interface and uses WCAG MCP servers for additional check coverage, but is slower for batch operations.
+
+## JSON Schema
+
+The report generators expect a JSON file with this structure:
 
 ```json
 {
@@ -161,48 +201,10 @@ The report generator expects a JSON file with this structure:
       "reference": "https://www.w3.org/TR/WCAG21/#contrast-minimum"
     }
   ],
-  "qualityIssues": [
-    {
-      "pageUrl": "https://example.com",
-      "category": "Broken Image",
-      "severity": "warning",
-      "element": "img.hero",
-      "description": "Image fails to load",
-      "sourceFile": "styles.css",
-      "existingRule": "",
-      "cssBefore": "(not set)",
-      "cssAfter": "display: none;",
-      "cssFix": "img.hero { display: none; }",
-      "recommendation": "Replace image source"
-    }
-  ],
-  "brokenLinks": [
-    {
-      "url": "https://example.com/missing-page",
-      "status": 404,
-      "error": "",
-      "linkText": "Click here",
-      "internal": true,
-      "foundOnPages": ["https://example.com", "https://example.com/about"]
-    }
-  ],
-  "formIssues": [
-    {
-      "pageUrl": "https://example.com/contact",
-      "form": "form#contact-form",
-      "issueType": "Missing Action",
-      "severity": "warning",
-      "description": "Form has no action attribute",
-      "details": ""
-    }
-  ],
-  "adDetection": [
-    {
-      "network": "Google AdSense",
-      "detected": true,
-      "foundOnPages": ["https://example.com"]
-    }
-  ]
+  "qualityIssues": [],
+  "brokenLinks": [],
+  "formIssues": [],
+  "adDetection": []
 }
 ```
 
