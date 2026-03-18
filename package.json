@@ -8,7 +8,8 @@
   },
   "scripts": {
     "report": "node generate-report.mjs",
-    "bulk-summary": "node generate-bulk-summary.mjs"
+    "bulk-summary": "node generate-bulk-summary.mjs",
+    "batch-audit": "node batch-audit.mjs"
   },
   "keywords": ["wcag", "accessibility", "site-check"],
   "author": "",
@@ -16,5 +17,8 @@
   "type": "module",
   "dependencies": {
     "exceljs": "^4.4.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.58.2"
   }
 }
